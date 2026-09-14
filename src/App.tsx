@@ -76,6 +76,7 @@ type SectionId =
   | 'documents'
   | 'achievements'
   | 'journal'
+  | 'reminders'
   | 'analytics'
   | 'ai'
   | 'settings';
@@ -109,6 +110,8 @@ type ActionType =
   | 'Video'
   | 'Document'
   | 'Goal';
+
+type EditorMode = 'create' | 'edit';
 
 interface Profile {
   name: string;
@@ -350,6 +353,7 @@ const navItems: { id: SectionId; label: string; icon: LucideIcon }[] = [
   { id: 'goals', label: 'Goals', icon: Target },
   { id: 'plans', label: 'Important Plans', icon: Star },
   { id: 'notes', label: 'Notes', icon: NotebookPen },
+  { id: 'reminders', label: 'Reminders', icon: Bell },
   { id: 'photos', label: 'Photos', icon: ImageIcon },
   { id: 'videos', label: 'Videos', icon: Video },
   { id: 'documents', label: 'Documents', icon: FileText },
@@ -1397,18 +1401,129 @@ function App() {
     }
   };
 
+  const createEmptyDraftForSection = (section: PersistedSection): Record<string, any> => {
+    const today = new Date().toISOString().slice(0, 10);
+
+    switch (section) {
+      case 'tasks':
+        return { id: 0, title: '', description: '', dueDate: today, dueTime: '09:00', priority: 'Medium', category: 'Work', status: 'Not Started', progress: 0, notes: '', tags: '' };
+      case 'schedules':
+        return { id: 0, title: '', date: today, startTime: '09:00', endTime: '10:00', category: 'Work', priority: 'Medium', notes: '', reminder: '15 min before', completed: false, recurring: 'None' };
+      case 'projects':
+        return { id: 0, name: '', description: '', startDate: today, targetDate: today, status: 'Planning', progress: 0, technologies: '', goals: '', tasks: '', notes: '', photos: '', links: '', achievements: '' };
+      case 'ideas':
+        return { id: 0, name: '', description: '', problem: '', solution: '', targetCustomers: '', market: '', businessModel: '', resources: '', startupCost: 0, expectedRevenue: 0, expectedProfit: 0, marketingStrategy: '', competitors: '', advantages: '', risks: '', nextSteps: '', status: 'Idea', opportunityScore: 0 };
+      case 'plansData':
+        return { id: 0, name: '', vision: '', mission: '', problem: '', solution: '', targetAudience: '', pricing: '', investment: 0, revenueForecast: 0, expenseForecast: 0, profitForecast: 0, status: 'Draft' };
+      case 'expenses':
+        return { id: 0, amount: 0, date: today, category: 'Food', description: '', paymentMethod: 'Card', notes: '' };
+      case 'income':
+        return { id: 0, source: '', amount: 0, date: today, category: 'Business', description: '', notes: '' };
+      case 'goals':
+        return { id: 0, title: '', description: '', type: 'Personal', startDate: today, targetDate: today, progress: 0, status: 'On Track' };
+      case 'importantPlans':
+        return { id: 0, title: '', description: '', date: today, priority: 'Medium', status: 'Draft', actionSteps: '', pinned: false };
+      case 'notes':
+        return { id: 0, title: '', content: '', category: 'Personal', tags: '', pinned: false, archived: false };
+      case 'photos':
+        return { id: 0, title: '', album: 'General', date: today, description: '', tags: '', location: '', url: '', important: false };
+      case 'videos':
+        return { id: 0, title: '', description: '', date: today, category: 'General', album: 'General', tags: '', url: '', important: false };
+      case 'documents':
+        return { id: 0, name: '', category: 'General', description: '', date: today, tags: '', important: false, url: '' };
+      case 'achievements':
+        return { id: 0, title: '', date: today, description: '', category: 'Work', relatedProject: '', notes: '' };
+      case 'journalEntries':
+        return { id: 0, date: today, title: '', whatIDid: '', whatILearned: '', whatWentWell: '', needImprove: '', tomorrowPlan: '', mood: 'Happy' };
+      case 'reminders':
+        return { id: 0, title: '', time: '09:00', type: 'Task' };
+      default:
+        return { id: 0 };
+    }
+  };
+
   const openEditorForItem = (section: PersistedSection, item: Record<string, any>) => {
     setEditorState({
       section,
-      draft: { ...item },
+      mode: 'edit',
+      draft: {
+        ...item,
+        tags: Array.isArray(item.tags) ? item.tags.join(', ') : item.tags ?? '',
+        actionSteps: Array.isArray(item.actionSteps) ? item.actionSteps.join(', ') : item.actionSteps ?? '',
+      },
+    });
+  };
+
+  const openNewEditorForSection = (section: PersistedSection) => {
+    setEditorState({
+      section,
+      mode: 'create',
+      draft: createEmptyDraftForSection(section),
     });
   };
 
   const closeEditor = () => {
     setEditorState({
       section: null,
+      mode: 'edit',
       draft: null,
     });
+  };
+
+  const createSectionItem = (section: PersistedSection, item: Record<string, any>) => {
+    const newItem = { ...item };
+    switch (section) {
+      case 'tasks':
+        setTasks((current) => [newItem as TaskItem, ...current]);
+        break;
+      case 'schedules':
+        setSchedules((current) => [newItem as ScheduleItem, ...current]);
+        break;
+      case 'projects':
+        setProjects((current) => [newItem as ProjectItem, ...current]);
+        break;
+      case 'ideas':
+        setIdeas((current) => [newItem as BusinessIdea, ...current]);
+        break;
+      case 'plansData':
+        setPlansData((current) => [newItem as BusinessPlan, ...current]);
+        break;
+      case 'expenses':
+        setExpenses((current) => [newItem as ExpenseItem, ...current]);
+        break;
+      case 'income':
+        setIncome((current) => [newItem as IncomeItem, ...current]);
+        break;
+      case 'goals':
+        setGoals((current) => [newItem as GoalItem, ...current]);
+        break;
+      case 'importantPlans':
+        setImportantPlans((current) => [newItem as PlanItem, ...current]);
+        break;
+      case 'notes':
+        setNotes((current) => [newItem as NoteItem, ...current]);
+        break;
+      case 'photos':
+        setPhotos((current) => [newItem as PhotoItem, ...current]);
+        break;
+      case 'videos':
+        setVideos((current) => [newItem as VideoItem, ...current]);
+        break;
+      case 'documents':
+        setDocuments((current) => [newItem as DocumentItem, ...current]);
+        break;
+      case 'achievements':
+        setAchievements((current) => [newItem as AchievementItem, ...current]);
+        break;
+      case 'journalEntries':
+        setJournalEntries((current) => [newItem as JournalEntry, ...current]);
+        break;
+      case 'reminders':
+        setReminders((current) => [newItem as ReminderItem, ...current]);
+        break;
+      default:
+        break;
+    }
   };
 
   const updateSectionItem = (section: PersistedSection, itemId: number, updater: (item: any) => any) => {
@@ -1533,7 +1648,12 @@ function App() {
   };
 
   const normalizeEditorValue = (key: string, value: any) => {
-    if (key === 'tags') {
+    const arrayKeys = new Set(['tags', 'actionSteps', 'technologies', 'goals', 'tasks', 'photos', 'links', 'achievements']);
+
+    if (arrayKeys.has(key)) {
+      if (Array.isArray(value)) {
+        return value.map((item) => String(item).trim()).filter(Boolean);
+      }
       return String(value ?? '')
         .split(',')
         .map((item) => item.trim())
@@ -1656,6 +1776,7 @@ function App() {
       { key: 'date', label: 'Date', type: 'date' },
       { key: 'priority', label: 'Priority', type: 'select', options: ['Low', 'Medium', 'High', 'Critical'] },
       { key: 'status', label: 'Status', type: 'select', options: ['Draft', 'Active', 'Done'] },
+      { key: 'actionSteps', label: 'Action steps', type: 'text' },
       { key: 'pinned', label: 'Important', type: 'select', options: ['true', 'false'] },
     ],
     notes: [
@@ -1673,6 +1794,7 @@ function App() {
       { key: 'description', label: 'Description', type: 'textarea' },
       { key: 'tags', label: 'Tags', type: 'text' },
       { key: 'location', label: 'Location', type: 'text' },
+      { key: 'url', label: 'Image URL', type: 'text' },
       { key: 'important', label: 'Important', type: 'select', options: ['true', 'false'] },
     ],
     videos: [
@@ -1682,6 +1804,7 @@ function App() {
       { key: 'category', label: 'Category', type: 'text' },
       { key: 'album', label: 'Album', type: 'text' },
       { key: 'tags', label: 'Tags', type: 'text' },
+      { key: 'url', label: 'Video URL', type: 'text' },
       { key: 'important', label: 'Important', type: 'select', options: ['true', 'false'] },
     ],
     documents: [
@@ -1690,6 +1813,7 @@ function App() {
       { key: 'description', label: 'Description', type: 'textarea' },
       { key: 'date', label: 'Date', type: 'date' },
       { key: 'tags', label: 'Tags', type: 'text' },
+      { key: 'url', label: 'Document URL', type: 'text' },
       { key: 'important', label: 'Important', type: 'select', options: ['true', 'false'] },
     ],
     achievements: [
@@ -1717,8 +1841,9 @@ function App() {
     ],
   };
 
-  const [editorState, setEditorState] = useState<{ section: PersistedSection | null; draft: Record<string, any> | null }>({
+  const [editorState, setEditorState] = useState<{ section: PersistedSection | null; mode: EditorMode; draft: Record<string, any> | null }>({
     section: null,
+    mode: 'edit',
     draft: null,
   });
 
@@ -1738,16 +1863,27 @@ function App() {
   const handleEditorSave = (event?: React.FormEvent) => {
     event?.preventDefault();
 
-    if (!editorState.section || !editorState.draft || !editorState.draft.id) return;
+    if (!editorState.section || !editorState.draft) return;
 
     const normalizedDraft = Object.fromEntries(
       Object.entries(editorState.draft).map(([key, value]) => [key, normalizeEditorValue(key, value)]),
     );
 
-    updateSectionItem(editorState.section, Number(editorState.draft.id), (item) => ({
-      ...item,
+    const baseId = Number(normalizedDraft.id ?? 0);
+    const itemId = baseId || Date.now() + Math.floor(Math.random() * 1000);
+    const finalItem = {
       ...normalizedDraft,
-    }));
+      id: itemId,
+    };
+
+    if (editorState.mode === 'create') {
+      createSectionItem(editorState.section, finalItem);
+    } else {
+      updateSectionItem(editorState.section, Number(finalItem.id), (item) => ({
+        ...item,
+        ...finalItem,
+      }));
+    }
 
     closeEditor();
   };
@@ -1802,7 +1938,7 @@ function App() {
       <div className="panel max-h-[85vh] w-full max-w-2xl overflow-y-auto p-5">
         <div className="mb-4 flex items-center justify-between gap-3">
           <div>
-            <p className="text-xs uppercase tracking-[0.2em] text-primary-600 dark:text-primary-400">Edit item</p>
+            <p className="text-xs uppercase tracking-[0.2em] text-primary-600 dark:text-primary-400">{editorState.mode === 'create' ? 'Add new item' : 'Edit item'}</p>
             <h3 className="text-xl font-semibold text-slate-900 dark:text-white">{editorState.section}</h3>
           </div>
           <button
@@ -1869,7 +2005,7 @@ function App() {
               Cancel
             </button>
             <button type="submit" className="rounded-xl bg-primary-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-primary-500">
-              Save changes
+              {editorState.mode === 'create' ? 'Create item' : 'Save changes'}
             </button>
           </div>
         </form>
@@ -2652,7 +2788,7 @@ function App() {
               )}
 
               {activeSection === 'schedule' && (
-                <SectionShell title="Daily Schedule" subtitle="Calendar and timeline view">
+                <SectionShell title="Daily Schedule" subtitle="Calendar and timeline view" addNewLabel="Add New Schedule" onAddNew={() => openNewEditorForSection('schedules')}>
                   <div className="mb-4 flex flex-wrap gap-2">
                     {(['Today', 'Tomorrow', 'Week', 'Month'] as RangeKey[]).map((range) => (
                       <button key={range} className="chip hover:bg-primary-50 hover:text-primary-700 dark:hover:bg-primary-500/10 dark:hover:text-primary-300">
@@ -2687,7 +2823,7 @@ function App() {
               )}
 
               {activeSection === 'tasks' && (
-                <SectionShell title="Task Manager" subtitle="Kanban workflow and priority planning">
+                <SectionShell title="Task Manager" subtitle="Kanban workflow and priority planning" addNewLabel="Add New Task" onAddNew={() => openNewEditorForSection('tasks')}>
                   <div className="mb-4 flex flex-wrap gap-2">
                     {['Today', 'Upcoming', 'Completed', 'High Priority', 'Category'].map((filter) => (
                       <button key={filter} className="chip hover:bg-primary-50 hover:text-primary-700 dark:hover:bg-primary-500/10 dark:hover:text-primary-300">
@@ -2731,7 +2867,7 @@ function App() {
               )}
 
               {activeSection === 'projects' && (
-                <SectionShell title="Projects" subtitle="Track progress, milestones, and outcomes">
+                <SectionShell title="Projects" subtitle="Track progress, milestones, and outcomes" addNewLabel="Add New Project" onAddNew={() => openNewEditorForSection('projects')}>
                   <div className="grid gap-4 lg:grid-cols-2">
                     {projects.map((project) => (
                       <div key={project.id} className="panel overflow-hidden p-4">
@@ -2771,7 +2907,7 @@ function App() {
               )}
 
               {activeSection === 'business-ideas' && (
-                <SectionShell title="Business Ideas Vault" subtitle="Review opportunities, models, and validation next steps">
+                <SectionShell title="Business Ideas Vault" subtitle="Review opportunities, models, and validation next steps" addNewLabel="Add New Business Idea" onAddNew={() => openNewEditorForSection('ideas')}>
                   <div className="grid gap-4 lg:grid-cols-2">
                     {ideas.map((idea) => (
                       <div key={idea.id} className="panel p-4">
@@ -2800,7 +2936,7 @@ function App() {
               )}
 
               {activeSection === 'business-plans' && (
-                <SectionShell title="Business Plans" subtitle="Detailed planning, forecasting, and operations">
+                <SectionShell title="Business Plans" subtitle="Detailed planning, forecasting, and operations" addNewLabel="Add New Business Plan" onAddNew={() => openNewEditorForSection('plansData')}>
                   <div className="grid gap-4 lg:grid-cols-2">
                     {plansData.map((plan) => (
                       <div key={plan.id} className="panel p-4">
@@ -2826,7 +2962,7 @@ function App() {
               )}
 
               {activeSection === 'expenses' && (
-                <SectionShell title="Expense Tracker" subtitle="Track spending, bills, and category trends">
+                <SectionShell title="Expense Tracker" subtitle="Track spending, bills, and category trends" addNewLabel="Add New Expense" onAddNew={() => openNewEditorForSection('expenses')}>
                   <div className="mb-4 grid gap-3 md:grid-cols-4">
                     <InfoPill label="Today's expenses" value={formatCurrency(expenses.filter((e) => e.date === '2026-09-13').reduce((sum, item) => sum + item.amount, 0))} />
                     <InfoPill label="Weekly expenses" value={formatCurrency(expenses.reduce((sum, item) => sum + item.amount, 0) * 0.75)} />
@@ -2872,7 +3008,7 @@ function App() {
               )}
 
               {activeSection === 'income' && (
-                <SectionShell title="Income & Profit Tracker" subtitle="Overview of revenue, costs, and net gain">
+                <SectionShell title="Income & Profit Tracker" subtitle="Overview of revenue, costs, and net gain" addNewLabel="Add New Income" onAddNew={() => openNewEditorForSection('income')}>
                   <div className="mb-5 grid gap-3 md:grid-cols-3">
                     <InfoPill label="Total income" value={formatCurrency(totalIncome)} />
                     <InfoPill label="Total expenses" value={formatCurrency(totalExpenses)} />
@@ -2921,7 +3057,7 @@ function App() {
               )}
 
               {activeSection === 'goals' && (
-                <SectionShell title="Goals & Plans" subtitle="Short-, mid-, and long-term goals with progress tracking">
+                <SectionShell title="Goals & Plans" subtitle="Short-, mid-, and long-term goals with progress tracking" addNewLabel="Add New Goal" onAddNew={() => openNewEditorForSection('goals')}>
                   <div className="grid gap-4 lg:grid-cols-2">
                     {goals.map((goal) => (
                       <div key={goal.id} className="panel p-4">
@@ -2951,7 +3087,7 @@ function App() {
               )}
 
               {activeSection === 'plans' && (
-                <SectionShell title="Important Plans" subtitle="Pinned plans, milestones, and critical actions">
+                <SectionShell title="Important Plans" subtitle="Pinned plans, milestones, and critical actions" addNewLabel="Add New Important Plan" onAddNew={() => openNewEditorForSection('importantPlans')}>
                   <div className="space-y-4">
                     {importantPlans.map((plan) => (
                       <div key={plan.id} className="panel p-4">
@@ -2979,7 +3115,7 @@ function App() {
               )}
 
               {activeSection === 'notes' && (
-                <SectionShell title="Notes" subtitle="Quick thinking, ideas, and personal references">
+                <SectionShell title="Notes" subtitle="Quick thinking, ideas, and personal references" addNewLabel="New Note" onAddNew={() => openNewEditorForSection('notes')}>
                   <div className="grid gap-4 lg:grid-cols-2">
                     {notes.map((note) => (
                       <div key={note.id} className="panel p-4">
@@ -3001,7 +3137,7 @@ function App() {
               )}
 
               {activeSection === 'photos' && (
-                <SectionShell title="Photo Vault" subtitle="Private memories and important images">
+                <SectionShell title="Photo Vault" subtitle="Private memories and important images" addNewLabel="Add New Photo" onAddNew={() => openNewEditorForSection('photos')}>
                   <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
                     {photos.map((photo) => (
                       <div key={photo.id} className="overflow-hidden rounded-2xl border border-slate-200 bg-white dark:border-slate-700 dark:bg-slate-900">
@@ -3022,7 +3158,7 @@ function App() {
               )}
 
               {activeSection === 'videos' && (
-                <SectionShell title="Video Vault" subtitle="Memories, tutorials, and project walkthroughs">
+                <SectionShell title="Video Vault" subtitle="Memories, tutorials, and project walkthroughs" addNewLabel="Add New Video" onAddNew={() => openNewEditorForSection('videos')}>
                   <div className="grid gap-4 md:grid-cols-2">
                     {videos.map((video) => (
                       <div key={video.id} className="panel overflow-hidden p-3">
@@ -3042,7 +3178,7 @@ function App() {
               )}
 
               {activeSection === 'documents' && (
-                <SectionShell title="Document Vault" subtitle="Files, certificates, and key records">
+                <SectionShell title="Document Vault" subtitle="Files, certificates, and key records" addNewLabel="Add New Document" onAddNew={() => openNewEditorForSection('documents')}>
                   <div className="space-y-3">
                     {documents.map((document) => (
                       <div key={document.id} className="panel flex items-center justify-between gap-3 p-4">
@@ -3062,7 +3198,7 @@ function App() {
               )}
 
               {activeSection === 'achievements' && (
-                <SectionShell title="Achievements" subtitle="Milestones and wins across work, study, and business">
+                <SectionShell title="Achievements" subtitle="Milestones and wins across work, study, and business" addNewLabel="Add New Achievement" onAddNew={() => openNewEditorForSection('achievements')}>
                   <div className="space-y-4">
                     {achievements.map((entry) => (
                       <div key={entry.id} className="relative rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-700 dark:bg-slate-800/80">
@@ -3084,7 +3220,7 @@ function App() {
               )}
 
               {activeSection === 'journal' && (
-                <SectionShell title="Journal" subtitle="Daily reflections and personal insights">
+                <SectionShell title="Journal" subtitle="Daily reflections and personal insights" addNewLabel="New Journal Entry" onAddNew={() => openNewEditorForSection('journalEntries')}>
                   <div className="space-y-4">
                     {journalEntries.map((entry) => (
                       <div key={entry.id} className="panel p-4">
@@ -3103,6 +3239,23 @@ function App() {
                           <strong>Tomorrow's plan:</strong> {entry.tomorrowPlan}
                         </div>
                         {renderCrudActions('journalEntries', entry as Record<string, any>)}
+                      </div>
+                    ))}
+                  </div>
+                </SectionShell>
+              )}
+
+              {activeSection === 'reminders' && (
+                <SectionShell title="Reminders" subtitle="Keep important actions and deadlines top of mind" addNewLabel="Add New Reminder" onAddNew={() => openNewEditorForSection('reminders')}>
+                  <div className="space-y-3">
+                    {reminders.map((reminder) => (
+                      <div key={reminder.id} className="panel flex items-center justify-between gap-3 p-4">
+                        <div>
+                          <p className="font-semibold text-slate-900 dark:text-white">{reminder.title}</p>
+                          <p className="text-sm text-slate-500">{reminder.time} • {reminder.type}</p>
+                        </div>
+                        <span className="chip">{reminder.type}</span>
+                        {renderCrudActions('reminders', reminder as Record<string, any>)}
                       </div>
                     ))}
                   </div>
@@ -3331,21 +3484,34 @@ function App() {
           </div>
         </div>
 
+        {editorModal}
         {quickAddType && quickAddForm}
       </div>
     </div>
   );
 }
 
-function SectionShell({ title, subtitle, children }: { title: string; subtitle: string; children: React.ReactNode }) {
+function SectionShell({ title, subtitle, children, addNewLabel, onAddNew }: { title: string; subtitle: string; children: React.ReactNode; addNewLabel?: string; onAddNew?: () => void; }) {
   return (
     <div className="space-y-5">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-3">
         <div>
           <p className="text-xs uppercase tracking-[0.2em] text-primary-600">Module</p>
           <h3 className="text-3xl font-bold text-slate-900 dark:text-white">{title}</h3>
         </div>
-        <div className="chip">{subtitle}</div>
+        <div className="flex items-center gap-2">
+          {addNewLabel && onAddNew && (
+            <button
+              type="button"
+              onClick={onAddNew}
+              className="inline-flex items-center gap-2 rounded-xl bg-primary-600 px-3 py-2 text-sm font-semibold text-white shadow-sm hover:bg-primary-500"
+            >
+              <Plus className="h-4 w-4" />
+              {addNewLabel}
+            </button>
+          )}
+          <div className="chip">{subtitle}</div>
+        </div>
       </div>
       {children}
     </div>
