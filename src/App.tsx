@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { supabase, supabaseEnabled } from './lib/supabase';
 import {
   Activity,
   ArrowRight,
@@ -116,6 +117,26 @@ interface Profile {
   goals: string[];
   quote: string;
   photo: string;
+}
+
+interface UserSettings {
+  dashboardTitle: string;
+  accentColor: string;
+  privateMode: boolean;
+  notifications: boolean;
+  widgetOrder: string[];
+}
+
+interface PrivateVaultItem {
+  id: number;
+  name: string;
+  type: 'photo' | 'document';
+  url: string;
+  description: string;
+  category: string;
+  uploadedAt: string;
+  tags: string[];
+  important: boolean;
 }
 
 interface TaskItem {
@@ -347,6 +368,39 @@ const initialProfile: Profile = {
   quote: 'Success is built one well-planned day at a time.',
   photo: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=crop&w=500&q=80',
 };
+
+const initialSettings: UserSettings = {
+  dashboardTitle: 'My Life Hub',
+  accentColor: 'sky',
+  privateMode: true,
+  notifications: true,
+  widgetOrder: ['dashboard', 'tasks', 'schedule', 'projects', 'analytics'],
+};
+
+const initialVaultItems: PrivateVaultItem[] = [
+  {
+    id: 1,
+    name: 'Launch day photo',
+    type: 'photo',
+    url: 'https://images.unsplash.com/photo-1522202176988-66273c2fd55f?auto=format&fit=crop&w=800&q=80',
+    description: 'Milestone capture from the first launch.',
+    category: 'Life',
+    uploadedAt: '2026-08-17',
+    tags: ['launch', 'milestone'],
+    important: true,
+  },
+  {
+    id: 2,
+    name: 'Business proposal.pdf',
+    type: 'document',
+    url: 'https://example.com/proposal.pdf',
+    description: 'Private business proposal and pitch document.',
+    category: 'Business',
+    uploadedAt: '2026-09-08',
+    tags: ['pitch', 'proposal'],
+    important: true,
+  },
+];
 
 const initialTasks: TaskItem[] = [
   {
@@ -757,6 +811,129 @@ const saveStorageValue = <T,>(key: string, value: T) => {
   localStorage.setItem(key, JSON.stringify(value));
 };
 
+const loadUserTableRecord = async <T,>(table: string, userId: string): Promise<T | null> => {
+  if (!supabaseEnabled || !supabase) {
+    return null;
+  }
+
+  const { data, error } = await supabase.from(table).select('data').eq('user_id', userId).maybeSingle();
+  if (error) {
+    throw error;
+  }
+
+  return ((data?.data as T) ?? null);
+};
+
+const saveUserTableRecord = async (table: string, userId: string, value: unknown) => {
+  if (!supabaseEnabled || !supabase) {
+    return;
+  }
+
+  const { error } = await supabase.from(table).upsert({ user_id: userId, data: value }, { onConflict: 'user_id' });
+  if (error) {
+    throw error;
+  }
+};
+
+const uploadPrivateFile = async (file: File, userId: string, folder: 'photos' | 'documents') => {
+  if (!supabaseEnabled || !supabase) {
+    return file.name;
+  }
+
+  const filePath = `${userId}/${folder}/${Date.now()}-${file.name.replace(/\s+/g, '-')}`;
+  const { error: uploadError } = await supabase.storage.from('private-vault').upload(filePath, file, { upsert: true });
+  if (uploadError) {
+    throw uploadError;
+  }
+
+  const { data: signedData, error: signedError } = await supabase.storage.from('private-vault').createSignedUrl(filePath, 60 * 60 * 24 * 7);
+  if (signedError) {
+    const { data: publicData } = supabase.storage.from('private-vault').getPublicUrl(filePath);
+    return publicData?.publicUrl ?? URL.createObjectURL(file);
+  }
+
+  return signedData?.signedUrl ?? URL.createObjectURL(file);
+};
+
+type PersistedSection =
+  | 'tasks'
+  | 'schedules'
+  | 'projects'
+  | 'ideas'
+  | 'plansData'
+  | 'expenses'
+  | 'income'
+  | 'goals'
+  | 'importantPlans'
+  | 'notes'
+  | 'photos'
+  | 'videos'
+  | 'documents'
+  | 'achievements'
+  | 'journalEntries'
+  | 'reminders';
+
+const dashboardTableNames: Record<PersistedSection, string> = {
+  tasks: 'dashboard_tasks',
+  schedules: 'dashboard_schedules',
+  projects: 'dashboard_projects',
+  ideas: 'dashboard_ideas',
+  plansData: 'dashboard_business_plans',
+  expenses: 'dashboard_expenses',
+  income: 'dashboard_income',
+  goals: 'dashboard_goals',
+  importantPlans: 'dashboard_important_plans',
+  notes: 'dashboard_notes',
+  photos: 'dashboard_photos',
+  videos: 'dashboard_videos',
+  documents: 'dashboard_documents',
+  achievements: 'dashboard_achievements',
+  journalEntries: 'dashboard_journal_entries',
+  reminders: 'dashboard_reminders',
+};
+
+const loadDashboardSection = async <T,>(section: PersistedSection, userId: string): Promise<T[]> => {
+  if (!supabaseEnabled || !supabase) {
+    return [];
+  }
+
+  const table = dashboardTableNames[section];
+  const { data, error } = await supabase.from(table).select('data').eq('user_id', userId);
+
+  if (error) {
+    throw error;
+  }
+
+  return (data ?? []).map((row) => row.data as T);
+};
+
+const saveDashboardSection = async <T,>(section: PersistedSection, userId: string, items: T[]) => {
+  if (!supabaseEnabled || !supabase) {
+    return;
+  }
+
+  const table = dashboardTableNames[section];
+  const deleteResult = await supabase.from(table).delete().eq('user_id', userId);
+  if (deleteResult.error) {
+    throw deleteResult.error;
+  }
+
+  if (!items.length) {
+    return;
+  }
+
+  const rows = items.map((item, index) => ({
+    user_id: userId,
+    id: Number((item as { id?: number }).id ?? index + 1),
+    data: item,
+  }));
+
+  const insertResult = await supabase.from(table).insert(rows);
+  if (insertResult.error) {
+    throw insertResult.error;
+  }
+};
+
 const getPriorityTone = (priority: string) => {
   switch (priority) {
     case 'Important':
@@ -785,7 +962,11 @@ function App() {
   });
   const [activeSection, setActiveSection] = useState<SectionId>('dashboard');
   const [authenticated, setAuthenticated] = useState<boolean>(() => readStorageValue('life-hub-auth', false));
+  const [authMode, setAuthMode] = useState<'signin' | 'signup'>('signin');
   const [authForm, setAuthForm] = useState({ email: 'demo@hub.com', password: 'demo123' });
+  const [authError, setAuthError] = useState('');
+  const [authLoading, setAuthLoading] = useState(false);
+  const [sessionEmail, setSessionEmail] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
   const [tasks, setTasks] = useState<TaskItem[]>(() => readStorageValue('life-hub-tasks', initialTasks));
   const [schedules, setSchedules] = useState<ScheduleItem[]>(() => readStorageValue('life-hub-schedules', initialSchedules));
@@ -804,7 +985,11 @@ function App() {
   const [journalEntries, setJournalEntries] = useState<JournalEntry[]>(() => readStorageValue('life-hub-journal', initialJournal));
   const [reminders, setReminders] = useState<ReminderItem[]>(() => readStorageValue('life-hub-reminders', initialReminders));
   const [quickAddType, setQuickAddType] = useState<ActionType | null>(null);
-  const [profile] = useState<Profile>(initialProfile);
+  const [profile, setProfile] = useState<Profile>(() => readStorageValue('life-hub-profile', initialProfile));
+  const [userSettings, setUserSettings] = useState<UserSettings>(() => readStorageValue('life-hub-settings', initialSettings));
+  const [vaultItems, setVaultItems] = useState<PrivateVaultItem[]>(() => readStorageValue('life-hub-vault', initialVaultItems));
+  const [supabaseHydrated, setSupabaseHydrated] = useState(false);
+  const [vaultUploading, setVaultUploading] = useState(false);
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', theme === 'dark');
@@ -814,6 +999,166 @@ function App() {
   useEffect(() => {
     saveStorageValue('life-hub-auth', authenticated);
   }, [authenticated]);
+
+  useEffect(() => {
+    saveStorageValue('life-hub-profile', profile);
+  }, [profile]);
+
+  useEffect(() => {
+    saveStorageValue('life-hub-settings', userSettings);
+  }, [userSettings]);
+
+  useEffect(() => {
+    saveStorageValue('life-hub-vault', vaultItems);
+  }, [vaultItems]);
+
+  useEffect(() => {
+    if (!supabaseEnabled || !supabase) return;
+
+    let mounted = true;
+    const client = supabase;
+
+    const restoreSession = async () => {
+      const { data: { session }, error } = await client.auth.getSession();
+
+      if (!mounted) return;
+
+      if (error) {
+        setAuthError(error.message);
+        return;
+      }
+
+      if (session?.user) {
+        setAuthenticated(true);
+        setSessionEmail(session.user.email ?? '');
+      }
+    };
+
+    restoreSession();
+
+    const { data: { subscription } } = client.auth.onAuthStateChange((_event, session) => {
+      if (!mounted) return;
+
+      const loggedIn = Boolean(session?.user);
+      setAuthenticated(loggedIn);
+      setSessionEmail(session?.user?.email ?? '');
+      if (!loggedIn) {
+        setAuthError('');
+      }
+    });
+
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!supabaseEnabled || !supabase || !authenticated) {
+      setSupabaseHydrated(false);
+      return;
+    }
+
+    const client = supabase;
+    let ignore = false;
+
+    const hydrateDashboard = async () => {
+      const { data: { user }, error: userError } = await client.auth.getUser();
+      if (ignore || userError || !user) return;
+
+      try {
+        const [loadedTasks, loadedSchedules, loadedProjects, loadedIdeas, loadedPlansData, loadedExpenses, loadedIncome, loadedGoals, loadedImportantPlans, loadedNotes, loadedPhotos, loadedVideos, loadedDocuments, loadedAchievements, loadedJournalEntries, loadedReminders] = await Promise.all([
+          loadDashboardSection<TaskItem>('tasks', user.id),
+          loadDashboardSection<ScheduleItem>('schedules', user.id),
+          loadDashboardSection<ProjectItem>('projects', user.id),
+          loadDashboardSection<BusinessIdea>('ideas', user.id),
+          loadDashboardSection<BusinessPlan>('plansData', user.id),
+          loadDashboardSection<ExpenseItem>('expenses', user.id),
+          loadDashboardSection<IncomeItem>('income', user.id),
+          loadDashboardSection<GoalItem>('goals', user.id),
+          loadDashboardSection<PlanItem>('importantPlans', user.id),
+          loadDashboardSection<NoteItem>('notes', user.id),
+          loadDashboardSection<PhotoItem>('photos', user.id),
+          loadDashboardSection<VideoItem>('videos', user.id),
+          loadDashboardSection<DocumentItem>('documents', user.id),
+          loadDashboardSection<AchievementItem>('achievements', user.id),
+          loadDashboardSection<JournalEntry>('journalEntries', user.id),
+          loadDashboardSection<ReminderItem>('reminders', user.id),
+        ]);
+
+        if (ignore) return;
+
+        setTasks(loadedTasks.length ? loadedTasks : initialTasks);
+        setSchedules(loadedSchedules.length ? loadedSchedules : initialSchedules);
+        setProjects(loadedProjects.length ? loadedProjects : initialProjects);
+        setIdeas(loadedIdeas.length ? loadedIdeas : initialIdeas);
+        setPlansData(loadedPlansData.length ? loadedPlansData : initialBusinessPlans);
+        setExpenses(loadedExpenses.length ? loadedExpenses : initialExpenses);
+        setIncome(loadedIncome.length ? loadedIncome : initialIncome);
+        setGoals(loadedGoals.length ? loadedGoals : initialGoals);
+        setImportantPlans(loadedImportantPlans.length ? loadedImportantPlans : initialPinnedPlans);
+        setNotes(loadedNotes.length ? loadedNotes : initialNotes);
+        setPhotos(loadedPhotos.length ? loadedPhotos : initialPhotos);
+        setVideos(loadedVideos.length ? loadedVideos : initialVideos);
+        setDocuments(loadedDocuments.length ? loadedDocuments : initialDocuments);
+        setAchievements(loadedAchievements.length ? loadedAchievements : initialAchievements);
+        setJournalEntries(loadedJournalEntries.length ? loadedJournalEntries : initialJournal);
+        setReminders(loadedReminders.length ? loadedReminders : initialReminders);
+        setSupabaseHydrated(true);
+      } catch (error) {
+        if (!ignore) {
+          setAuthError(error instanceof Error ? error.message : 'Unable to load dashboard from Supabase.');
+        }
+      }
+    };
+
+    hydrateDashboard();
+    return () => { ignore = true; };
+  }, [authenticated]);
+
+  useEffect(() => {
+    if (!supabaseEnabled || !supabase || !authenticated || !supabaseHydrated) return;
+
+    const client = supabase;
+    let ignore = false;
+
+    const syncDashboard = async () => {
+      const { data: { user }, error: userError } = await client.auth.getUser();
+      if (ignore || userError || !user) return;
+
+      try {
+        await Promise.all([
+          saveDashboardSection('tasks', user.id, tasks),
+          saveDashboardSection('schedules', user.id, schedules),
+          saveDashboardSection('projects', user.id, projects),
+          saveDashboardSection('ideas', user.id, ideas),
+          saveDashboardSection('plansData', user.id, plansData),
+          saveDashboardSection('expenses', user.id, expenses),
+          saveDashboardSection('income', user.id, income),
+          saveDashboardSection('goals', user.id, goals),
+          saveDashboardSection('importantPlans', user.id, importantPlans),
+          saveDashboardSection('notes', user.id, notes),
+          saveDashboardSection('photos', user.id, photos),
+          saveDashboardSection('videos', user.id, videos),
+          saveDashboardSection('documents', user.id, documents),
+          saveDashboardSection('achievements', user.id, achievements),
+          saveDashboardSection('journalEntries', user.id, journalEntries),
+          saveDashboardSection('reminders', user.id, reminders),
+        ]);
+
+        if (!ignore) {
+          setAuthError('');
+        }
+      } catch (error) {
+        if (!ignore) {
+          setAuthError(error instanceof Error ? error.message : 'Unable to save dashboard to Supabase.');
+        }
+      }
+    };
+
+    syncDashboard();
+    return () => { ignore = true; };
+  }, [authenticated, supabaseHydrated, theme, tasks, schedules, projects, ideas, plansData, expenses, income, goals, importantPlans, notes, photos, videos, documents, achievements, journalEntries, reminders]);
 
   useEffect(() => saveStorageValue('life-hub-tasks', tasks), [tasks]);
   useEffect(() => saveStorageValue('life-hub-schedules', schedules), [schedules]);
@@ -879,16 +1224,658 @@ function App() {
     );
   }, [searchTerm, tasks, schedules, projects, ideas, plansData, notes, goals]);
 
-  const handleLogin = (event: React.FormEvent) => {
+  useEffect(() => {
+    if (!supabaseEnabled || !supabase || !authenticated) return;
+
+    const client = supabase;
+    let ignore = false;
+
+    const hydrateProfileData = async () => {
+      const { data: { user }, error: userError } = await client.auth.getUser();
+      if (ignore || userError || !user) return;
+
+      try {
+        const [savedProfile, savedSettings, savedVault] = await Promise.all([
+          loadUserTableRecord<Profile>('user_profiles', user.id),
+          loadUserTableRecord<UserSettings>('user_settings', user.id),
+          loadUserTableRecord<PrivateVaultItem[]>('private_vault', user.id),
+        ]);
+
+        if (!ignore) {
+          if (savedProfile) setProfile(savedProfile);
+          if (savedSettings) setUserSettings(savedSettings);
+          if (savedVault && savedVault.length) setVaultItems(savedVault);
+        }
+      } catch (error) {
+        if (!ignore) {
+          setAuthError(error instanceof Error ? error.message : 'Unable to load personal profile data.');
+        }
+      }
+    };
+
+    hydrateProfileData();
+    return () => { ignore = true; };
+  }, [authenticated]);
+
+  useEffect(() => {
+    if (!supabaseEnabled || !supabase || !authenticated) return;
+
+    const client = supabase;
+    let ignore = false;
+
+    const syncPersonalData = async () => {
+      const { data: { user }, error: userError } = await client.auth.getUser();
+      if (ignore || userError || !user) return;
+
+      try {
+        await Promise.all([
+          saveUserTableRecord('user_profiles', user.id, profile),
+          saveUserTableRecord('user_settings', user.id, userSettings),
+          saveUserTableRecord('private_vault', user.id, vaultItems),
+        ]);
+      } catch (error) {
+        if (!ignore) {
+          setAuthError(error instanceof Error ? error.message : 'Unable to save personal profile data.');
+        }
+      }
+    };
+
+    syncPersonalData();
+    return () => { ignore = true; };
+  }, [authenticated, profile, userSettings, vaultItems]);
+
+  const handleLogin = async (event: React.FormEvent) => {
     event.preventDefault();
-    if (authForm.email && authForm.password) {
-      setAuthenticated(true);
+
+    if (!authForm.email || !authForm.password) {
+      setAuthError('Please enter both email and password.');
+      return;
     }
+
+    if (supabaseEnabled && supabase) {
+      setAuthLoading(true);
+      setAuthError('');
+
+      try {
+        const authResult = authMode === 'signup'
+          ? await supabase.auth.signUp({
+              email: authForm.email,
+              password: authForm.password,
+            })
+          : await supabase.auth.signInWithPassword({
+              email: authForm.email,
+              password: authForm.password,
+            });
+
+        if (authResult.error) {
+          throw authResult.error;
+        }
+
+        setAuthenticated(true);
+        setSessionEmail(authResult.data?.user?.email ?? authForm.email);
+      } catch (error) {
+        setAuthenticated(false);
+        setAuthError(error instanceof Error ? error.message : 'Unable to authenticate.');
+      } finally {
+        setAuthLoading(false);
+      }
+
+      return;
+    }
+
+    if (authForm.email === 'demo@hub.com' && authForm.password === 'demo123') {
+      setAuthenticated(true);
+      setSessionEmail(authForm.email);
+      setAuthError('');
+      return;
+    }
+
+    setAuthenticated(false);
+    setAuthError('Use demo@hub.com / demo123 or configure Supabase in your environment.');
+  };
+
+  const handleLogout = async () => {
+    if (supabaseEnabled && supabase) {
+      await supabase.auth.signOut();
+    }
+
+    setAuthenticated(false);
+    setSessionEmail('');
+    setAuthError('');
   };
 
   const addQuickItem = (type: ActionType) => {
     setQuickAddType(type);
   };
+
+  const handleProfileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file || !supabaseEnabled || !supabase) return;
+
+    const { data: { user }, error: userError } = await supabase.auth.getUser();
+    if (userError || !user) return;
+
+    try {
+      setVaultUploading(true);
+      const url = await uploadPrivateFile(file, user.id, 'photos');
+      setProfile((current) => ({ ...current, photo: url }));
+    } catch (error) {
+      setAuthError(error instanceof Error ? error.message : 'Unable to upload profile photo.');
+    } finally {
+      setVaultUploading(false);
+      event.target.value = '';
+    }
+  };
+
+  const handleVaultUpload = async (event: React.ChangeEvent<HTMLInputElement>, type: 'photo' | 'document') => {
+    const file = event.target.files?.[0];
+    if (!file || !supabaseEnabled || !supabase) return;
+
+    const { data: { user }, error: userError } = await supabase.auth.getUser();
+    if (userError || !user) return;
+
+    try {
+      setVaultUploading(true);
+      const url = await uploadPrivateFile(file, user.id, type === 'photo' ? 'photos' : 'documents');
+      const item: PrivateVaultItem = {
+        id: Date.now(),
+        name: file.name,
+        type,
+        url,
+        description: `Uploaded ${new Date().toLocaleDateString()}`,
+        category: type === 'photo' ? 'Life' : 'Documents',
+        uploadedAt: new Date().toISOString().slice(0, 10),
+        tags: [type],
+        important: false,
+      };
+      setVaultItems((current) => [item, ...current]);
+    } catch (error) {
+      setAuthError(error instanceof Error ? error.message : 'Unable to upload vault item.');
+    } finally {
+      setVaultUploading(false);
+      event.target.value = '';
+    }
+  };
+
+  const openEditorForItem = (section: PersistedSection, item: Record<string, any>) => {
+    setEditorState({
+      section,
+      draft: { ...item },
+    });
+  };
+
+  const closeEditor = () => {
+    setEditorState({
+      section: null,
+      draft: null,
+    });
+  };
+
+  const updateSectionItem = (section: PersistedSection, itemId: number, updater: (item: any) => any) => {
+    switch (section) {
+      case 'tasks':
+        setTasks((current) => current.map((item) => (item.id === itemId ? updater(item) : item)));
+        break;
+      case 'schedules':
+        setSchedules((current) => current.map((item) => (item.id === itemId ? updater(item) : item)));
+        break;
+      case 'projects':
+        setProjects((current) => current.map((item) => (item.id === itemId ? updater(item) : item)));
+        break;
+      case 'ideas':
+        setIdeas((current) => current.map((item) => (item.id === itemId ? updater(item) : item)));
+        break;
+      case 'plansData':
+        setPlansData((current) => current.map((item) => (item.id === itemId ? updater(item) : item)));
+        break;
+      case 'expenses':
+        setExpenses((current) => current.map((item) => (item.id === itemId ? updater(item) : item)));
+        break;
+      case 'income':
+        setIncome((current) => current.map((item) => (item.id === itemId ? updater(item) : item)));
+        break;
+      case 'goals':
+        setGoals((current) => current.map((item) => (item.id === itemId ? updater(item) : item)));
+        break;
+      case 'importantPlans':
+        setImportantPlans((current) => current.map((item) => (item.id === itemId ? updater(item) : item)));
+        break;
+      case 'notes':
+        setNotes((current) => current.map((item) => (item.id === itemId ? updater(item) : item)));
+        break;
+      case 'photos':
+        setPhotos((current) => current.map((item) => (item.id === itemId ? updater(item) : item)));
+        break;
+      case 'videos':
+        setVideos((current) => current.map((item) => (item.id === itemId ? updater(item) : item)));
+        break;
+      case 'documents':
+        setDocuments((current) => current.map((item) => (item.id === itemId ? updater(item) : item)));
+        break;
+      case 'achievements':
+        setAchievements((current) => current.map((item) => (item.id === itemId ? updater(item) : item)));
+        break;
+      case 'journalEntries':
+        setJournalEntries((current) => current.map((item) => (item.id === itemId ? updater(item) : item)));
+        break;
+      case 'reminders':
+        setReminders((current) => current.map((item) => (item.id === itemId ? updater(item) : item)));
+        break;
+      default:
+        break;
+    }
+  };
+
+  const deleteSectionItem = (section: PersistedSection, itemId: number) => {
+    if (!window.confirm('Delete this item? This action cannot be undone.')) {
+      return;
+    }
+
+    switch (section) {
+      case 'tasks':
+        setTasks((current) => current.filter((item) => item.id !== itemId));
+        break;
+      case 'schedules':
+        setSchedules((current) => current.filter((item) => item.id !== itemId));
+        break;
+      case 'projects':
+        setProjects((current) => current.filter((item) => item.id !== itemId));
+        break;
+      case 'ideas':
+        setIdeas((current) => current.filter((item) => item.id !== itemId));
+        break;
+      case 'plansData':
+        setPlansData((current) => current.filter((item) => item.id !== itemId));
+        break;
+      case 'expenses':
+        setExpenses((current) => current.filter((item) => item.id !== itemId));
+        break;
+      case 'income':
+        setIncome((current) => current.filter((item) => item.id !== itemId));
+        break;
+      case 'goals':
+        setGoals((current) => current.filter((item) => item.id !== itemId));
+        break;
+      case 'importantPlans':
+        setImportantPlans((current) => current.filter((item) => item.id !== itemId));
+        break;
+      case 'notes':
+        setNotes((current) => current.filter((item) => item.id !== itemId));
+        break;
+      case 'photos':
+        setPhotos((current) => current.filter((item) => item.id !== itemId));
+        break;
+      case 'videos':
+        setVideos((current) => current.filter((item) => item.id !== itemId));
+        break;
+      case 'documents':
+        setDocuments((current) => current.filter((item) => item.id !== itemId));
+        break;
+      case 'achievements':
+        setAchievements((current) => current.filter((item) => item.id !== itemId));
+        break;
+      case 'journalEntries':
+        setJournalEntries((current) => current.filter((item) => item.id !== itemId));
+        break;
+      case 'reminders':
+        setReminders((current) => current.filter((item) => item.id !== itemId));
+        break;
+      default:
+        break;
+    }
+  };
+
+  const toggleImportantFlag = (section: PersistedSection, itemId: number, key: 'important' | 'pinned') => {
+    updateSectionItem(section, itemId, (item) => ({
+      ...item,
+      [key]: !Boolean(item[key]),
+    }));
+  };
+
+  const normalizeEditorValue = (key: string, value: any) => {
+    if (key === 'tags') {
+      return String(value ?? '')
+        .split(',')
+        .map((item) => item.trim())
+        .filter(Boolean);
+    }
+
+    if (key === 'important' || key === 'pinned' || key === 'completed') {
+      if (typeof value === 'string') {
+        return value.toLowerCase() === 'true';
+      }
+      return Boolean(value);
+    }
+
+    if (
+      key === 'progress' ||
+      key === 'amount' ||
+      key === 'startupCost' ||
+      key === 'expectedRevenue' ||
+      key === 'expectedProfit' ||
+      key === 'investment' ||
+      key === 'revenueForecast' ||
+      key === 'expenseForecast' ||
+      key === 'profitForecast' ||
+      key === 'opportunityScore'
+    ) {
+      return Number(value ?? 0);
+    }
+
+    return value;
+  };
+
+  const editorFieldsBySection: Record<PersistedSection, Array<{ key: string; label: string; type: 'text' | 'textarea' | 'number' | 'date' | 'select'; options?: string[] }>> = {
+    tasks: [
+      { key: 'title', label: 'Title', type: 'text' },
+      { key: 'description', label: 'Description', type: 'textarea' },
+      { key: 'dueDate', label: 'Due date', type: 'date' },
+      { key: 'dueTime', label: 'Due time', type: 'text' },
+      { key: 'priority', label: 'Priority', type: 'select', options: ['Low', 'Medium', 'High', 'Important'] },
+      { key: 'category', label: 'Category', type: 'text' },
+      { key: 'status', label: 'Status', type: 'select', options: ['Not Started', 'In Progress', 'Completed', 'Cancelled'] },
+      { key: 'progress', label: 'Progress %', type: 'number' },
+      { key: 'notes', label: 'Notes', type: 'textarea' },
+      { key: 'tags', label: 'Tags', type: 'text' },
+    ],
+    schedules: [
+      { key: 'title', label: 'Title', type: 'text' },
+      { key: 'date', label: 'Date', type: 'date' },
+      { key: 'startTime', label: 'Start time', type: 'text' },
+      { key: 'endTime', label: 'End time', type: 'text' },
+      { key: 'category', label: 'Category', type: 'select', options: ['Study', 'College', 'Work', 'Project', 'Business', 'Personal', 'Exercise', 'Other'] },
+      { key: 'priority', label: 'Priority', type: 'select', options: ['Low', 'Medium', 'High', 'Important'] },
+      { key: 'notes', label: 'Notes', type: 'textarea' },
+      { key: 'reminder', label: 'Reminder', type: 'text' },
+      { key: 'recurring', label: 'Recurring', type: 'select', options: ['None', 'Daily', 'Weekly', 'Monthly'] },
+      { key: 'completed', label: 'Completed', type: 'select', options: ['true', 'false'] },
+    ],
+    projects: [
+      { key: 'name', label: 'Name', type: 'text' },
+      { key: 'description', label: 'Description', type: 'textarea' },
+      { key: 'startDate', label: 'Start date', type: 'date' },
+      { key: 'targetDate', label: 'Target date', type: 'date' },
+      { key: 'status', label: 'Status', type: 'select', options: ['Idea', 'Planning', 'Active', 'Completed', 'Paused'] },
+      { key: 'progress', label: 'Progress %', type: 'number' },
+      { key: 'notes', label: 'Notes', type: 'textarea' },
+    ],
+    ideas: [
+      { key: 'name', label: 'Name', type: 'text' },
+      { key: 'description', label: 'Description', type: 'textarea' },
+      { key: 'problem', label: 'Problem', type: 'textarea' },
+      { key: 'solution', label: 'Solution', type: 'textarea' },
+      { key: 'targetCustomers', label: 'Target customers', type: 'text' },
+      { key: 'market', label: 'Market', type: 'text' },
+      { key: 'businessModel', label: 'Business model', type: 'text' },
+      { key: 'status', label: 'Status', type: 'select', options: ['Idea', 'Researching', 'Planning', 'Testing', 'Active', 'Successful', 'Failed', 'Archived'] },
+      { key: 'opportunityScore', label: 'Opportunity score', type: 'number' },
+      { key: 'startupCost', label: 'Startup cost', type: 'number' },
+      { key: 'expectedProfit', label: 'Expected profit', type: 'number' },
+      { key: 'nextSteps', label: 'Next steps', type: 'textarea' },
+    ],
+    plansData: [
+      { key: 'name', label: 'Name', type: 'text' },
+      { key: 'vision', label: 'Vision', type: 'textarea' },
+      { key: 'mission', label: 'Mission', type: 'textarea' },
+      { key: 'problem', label: 'Problem', type: 'textarea' },
+      { key: 'solution', label: 'Solution', type: 'textarea' },
+      { key: 'targetAudience', label: 'Target audience', type: 'text' },
+      { key: 'pricing', label: 'Pricing', type: 'text' },
+      { key: 'investment', label: 'Investment', type: 'number' },
+      { key: 'profitForecast', label: 'Profit forecast', type: 'number' },
+      { key: 'status', label: 'Status', type: 'text' },
+    ],
+    expenses: [
+      { key: 'amount', label: 'Amount', type: 'number' },
+      { key: 'date', label: 'Date', type: 'date' },
+      { key: 'category', label: 'Category', type: 'text' },
+      { key: 'description', label: 'Description', type: 'textarea' },
+      { key: 'paymentMethod', label: 'Payment method', type: 'text' },
+      { key: 'notes', label: 'Notes', type: 'textarea' },
+    ],
+    income: [
+      { key: 'source', label: 'Source', type: 'text' },
+      { key: 'amount', label: 'Amount', type: 'number' },
+      { key: 'date', label: 'Date', type: 'date' },
+      { key: 'category', label: 'Category', type: 'text' },
+      { key: 'description', label: 'Description', type: 'textarea' },
+      { key: 'notes', label: 'Notes', type: 'textarea' },
+    ],
+    goals: [
+      { key: 'title', label: 'Title', type: 'text' },
+      { key: 'description', label: 'Description', type: 'textarea' },
+      { key: 'type', label: 'Type', type: 'text' },
+      { key: 'startDate', label: 'Start date', type: 'date' },
+      { key: 'targetDate', label: 'Target date', type: 'date' },
+      { key: 'progress', label: 'Progress %', type: 'number' },
+      { key: 'status', label: 'Status', type: 'select', options: ['On Track', 'Behind', 'Completed', 'At Risk'] },
+    ],
+    importantPlans: [
+      { key: 'title', label: 'Title', type: 'text' },
+      { key: 'description', label: 'Description', type: 'textarea' },
+      { key: 'date', label: 'Date', type: 'date' },
+      { key: 'priority', label: 'Priority', type: 'select', options: ['Low', 'Medium', 'High', 'Critical'] },
+      { key: 'status', label: 'Status', type: 'select', options: ['Draft', 'Active', 'Done'] },
+      { key: 'pinned', label: 'Important', type: 'select', options: ['true', 'false'] },
+    ],
+    notes: [
+      { key: 'title', label: 'Title', type: 'text' },
+      { key: 'content', label: 'Content', type: 'textarea' },
+      { key: 'category', label: 'Category', type: 'text' },
+      { key: 'pinned', label: 'Important', type: 'select', options: ['true', 'false'] },
+      { key: 'archived', label: 'Archived', type: 'select', options: ['true', 'false'] },
+      { key: 'tags', label: 'Tags', type: 'text' },
+    ],
+    photos: [
+      { key: 'title', label: 'Title', type: 'text' },
+      { key: 'album', label: 'Album', type: 'text' },
+      { key: 'date', label: 'Date', type: 'date' },
+      { key: 'description', label: 'Description', type: 'textarea' },
+      { key: 'tags', label: 'Tags', type: 'text' },
+      { key: 'location', label: 'Location', type: 'text' },
+      { key: 'important', label: 'Important', type: 'select', options: ['true', 'false'] },
+    ],
+    videos: [
+      { key: 'title', label: 'Title', type: 'text' },
+      { key: 'description', label: 'Description', type: 'textarea' },
+      { key: 'date', label: 'Date', type: 'date' },
+      { key: 'category', label: 'Category', type: 'text' },
+      { key: 'album', label: 'Album', type: 'text' },
+      { key: 'tags', label: 'Tags', type: 'text' },
+      { key: 'important', label: 'Important', type: 'select', options: ['true', 'false'] },
+    ],
+    documents: [
+      { key: 'name', label: 'Name', type: 'text' },
+      { key: 'category', label: 'Category', type: 'text' },
+      { key: 'description', label: 'Description', type: 'textarea' },
+      { key: 'date', label: 'Date', type: 'date' },
+      { key: 'tags', label: 'Tags', type: 'text' },
+      { key: 'important', label: 'Important', type: 'select', options: ['true', 'false'] },
+    ],
+    achievements: [
+      { key: 'title', label: 'Title', type: 'text' },
+      { key: 'date', label: 'Date', type: 'date' },
+      { key: 'description', label: 'Description', type: 'textarea' },
+      { key: 'category', label: 'Category', type: 'text' },
+      { key: 'relatedProject', label: 'Related project', type: 'text' },
+      { key: 'notes', label: 'Notes', type: 'textarea' },
+    ],
+    journalEntries: [
+      { key: 'date', label: 'Date', type: 'date' },
+      { key: 'title', label: 'Title', type: 'text' },
+      { key: 'whatIDid', label: 'What I did', type: 'textarea' },
+      { key: 'whatILearned', label: 'What I learned', type: 'textarea' },
+      { key: 'whatWentWell', label: 'What went well', type: 'textarea' },
+      { key: 'needImprove', label: 'Need improve', type: 'textarea' },
+      { key: 'tomorrowPlan', label: 'Tomorrow plan', type: 'textarea' },
+      { key: 'mood', label: 'Mood', type: 'text' },
+    ],
+    reminders: [
+      { key: 'title', label: 'Title', type: 'text' },
+      { key: 'time', label: 'Time', type: 'text' },
+      { key: 'type', label: 'Type', type: 'select', options: ['Task', 'Deadline', 'Goal', 'Project'] },
+    ],
+  };
+
+  const [editorState, setEditorState] = useState<{ section: PersistedSection | null; draft: Record<string, any> | null }>({
+    section: null,
+    draft: null,
+  });
+
+  const handleEditorFieldChange = (key: string, value: string) => {
+    setEditorState((current) => {
+      if (!current.section || !current.draft) return current;
+      return {
+        ...current,
+        draft: {
+          ...current.draft,
+          [key]: value,
+        },
+      };
+    });
+  };
+
+  const handleEditorSave = (event?: React.FormEvent) => {
+    event?.preventDefault();
+
+    if (!editorState.section || !editorState.draft || !editorState.draft.id) return;
+
+    const normalizedDraft = Object.fromEntries(
+      Object.entries(editorState.draft).map(([key, value]) => [key, normalizeEditorValue(key, value)]),
+    );
+
+    updateSectionItem(editorState.section, Number(editorState.draft.id), (item) => ({
+      ...item,
+      ...normalizedDraft,
+    }));
+
+    closeEditor();
+  };
+
+  const renderCrudActions = (
+    section: PersistedSection,
+    item: Record<string, any>,
+    options: { canOpen?: boolean; openUrl?: string; importantKey?: 'important' | 'pinned'; openLabel?: string } = {},
+  ) => {
+    const importantKey = options.importantKey;
+
+    return (
+      <div className="mt-4 flex flex-wrap gap-2">
+        {(options.canOpen || options.openUrl) && (options.openUrl || item?.url) && (
+          <button
+            type="button"
+            onClick={() => window.open(options.openUrl || item.url, '_blank', 'noopener,noreferrer')}
+            className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:border-primary-300 hover:text-primary-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+          >
+            {options.openLabel ?? 'Open'}
+          </button>
+        )}
+        {importantKey && (
+          <button
+            type="button"
+            onClick={() => toggleImportantFlag(section, item.id, importantKey)}
+            className="rounded-lg border border-amber-200 bg-amber-50 px-2.5 py-1.5 text-xs font-medium text-amber-700 dark:border-amber-800 dark:bg-amber-500/10 dark:text-amber-300"
+          >
+            {Boolean(item[importantKey]) ? 'Unmark important' : 'Mark important'}
+          </button>
+        )}
+        <button
+          type="button"
+          onClick={() => openEditorForItem(section, item)}
+          className="rounded-lg border border-slate-200 bg-white px-2.5 py-1.5 text-xs font-medium text-slate-700 hover:border-primary-300 hover:text-primary-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+        >
+          Edit
+        </button>
+        <button
+          type="button"
+          onClick={() => deleteSectionItem(section, item.id)}
+          className="rounded-lg border border-rose-200 bg-rose-50 px-2.5 py-1.5 text-xs font-medium text-rose-700 dark:border-rose-800 dark:bg-rose-500/10 dark:text-rose-300"
+        >
+          Delete
+        </button>
+      </div>
+    );
+  };
+
+  const editorModal = editorState.section && editorState.draft ? (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/60 p-4">
+      <div className="panel max-h-[85vh] w-full max-w-2xl overflow-y-auto p-5">
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <div>
+            <p className="text-xs uppercase tracking-[0.2em] text-primary-600 dark:text-primary-400">Edit item</p>
+            <h3 className="text-xl font-semibold text-slate-900 dark:text-white">{editorState.section}</h3>
+          </div>
+          <button
+            type="button"
+            onClick={closeEditor}
+            className="rounded-full p-2 hover:bg-slate-100 dark:hover:bg-slate-800"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <form onSubmit={handleEditorSave} className="space-y-4">
+          {editorFieldsBySection[editorState.section].map((field) => {
+            const draft = editorState.draft;
+            if (!draft) return null;
+            const value = draft[field.key];
+            const inputClass = 'input';
+
+            if (field.type === 'textarea') {
+              return (
+                <div key={field.key}>
+                  <label className="label">{field.label}</label>
+                  <textarea
+                    value={value ?? ''}
+                    onChange={(event) => handleEditorFieldChange(field.key, event.target.value)}
+                    className={`${inputClass} min-h-[100px]`}
+                  />
+                </div>
+              );
+            }
+
+            if (field.type === 'select') {
+              return (
+                <div key={field.key}>
+                  <label className="label">{field.label}</label>
+                  <select
+                    value={String(value ?? (field.options?.[0] ?? ''))}
+                    onChange={(event) => handleEditorFieldChange(field.key, event.target.value)}
+                    className={inputClass}
+                  >
+                    {field.options?.map((option) => (
+                      <option key={option} value={option}>{option}</option>
+                    ))}
+                  </select>
+                </div>
+              );
+            }
+
+            return (
+              <div key={field.key}>
+                <label className="label">{field.label}</label>
+                <input
+                  type={field.type}
+                  value={value ?? ''}
+                  onChange={(event) => handleEditorFieldChange(field.key, event.target.value)}
+                  className={inputClass}
+                />
+              </div>
+            );
+          })}
+
+          <div className="flex justify-end gap-3 pt-2">
+            <button type="button" onClick={closeEditor} className="rounded-xl border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 dark:border-slate-700 dark:text-slate-200">
+              Cancel
+            </button>
+            <button type="submit" className="rounded-xl bg-primary-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-primary-500">
+              Save changes
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  ) : null;
 
   const handleQuickAdd = (event: React.FormEvent) => {
     event.preventDefault();
@@ -1351,6 +2338,23 @@ function App() {
                 </div>
               </div>
 
+              <div className="mb-4 flex rounded-xl border border-slate-200 bg-slate-100 p-1 dark:border-slate-700 dark:bg-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setAuthMode('signin')}
+                  className={`flex-1 rounded-lg px-3 py-2 text-sm font-medium transition ${authMode === 'signin' ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-900 dark:text-white' : 'text-slate-500 dark:text-slate-300'}`}
+                >
+                  Sign in
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setAuthMode('signup')}
+                  className={`flex-1 rounded-lg px-3 py-2 text-sm font-medium transition ${authMode === 'signup' ? 'bg-white text-slate-900 shadow-sm dark:bg-slate-900 dark:text-white' : 'text-slate-500 dark:text-slate-300'}`}
+                >
+                  Create account
+                </button>
+              </div>
+
               <form onSubmit={handleLogin} className="space-y-4">
                 <div>
                   <label className="label">Email</label>
@@ -1371,14 +2375,20 @@ function App() {
                   />
                 </div>
 
-                <button type="submit" className="flex w-full items-center justify-center gap-2 rounded-xl bg-primary-600 px-4 py-3 font-medium text-white shadow-sm hover:bg-primary-500">
+                {authError && (
+                  <div className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700 dark:border-rose-800 dark:bg-rose-500/10 dark:text-rose-300">
+                    {authError}
+                  </div>
+                )}
+
+                <button type="submit" disabled={authLoading} className="flex w-full items-center justify-center gap-2 rounded-xl bg-primary-600 px-4 py-3 font-medium text-white shadow-sm hover:bg-primary-500 disabled:cursor-not-allowed disabled:opacity-70">
                   <LogIn className="h-4 w-4" />
-                  Sign in securely
+                  {authLoading ? 'Please wait...' : authMode === 'signin' ? 'Sign in securely' : 'Create account'}
                 </button>
               </form>
 
               <div className="mt-6 rounded-2xl bg-slate-100 p-3 text-sm text-slate-600 dark:bg-slate-800 dark:text-slate-300">
-                Demo access: demo@hub.com / demo123
+                {supabaseEnabled ? 'Supabase auth is active for real account access.' : 'Demo access: demo@hub.com / demo123'}
               </div>
             </div>
           </div>
@@ -1434,7 +2444,7 @@ function App() {
                   <img src={profile.photo} alt={profile.name} className="h-12 w-12 rounded-full object-cover" />
                   <div>
                     <p className="text-xs uppercase tracking-[0.2em] text-primary-600 dark:text-primary-400">Profile</p>
-                    <h2 className="text-xl font-semibold text-slate-900 dark:text-white">{profile.name}</h2>
+                    <h2 className="text-xl font-semibold text-slate-900 dark:text-white">{sessionEmail || profile.name}</h2>
                   </div>
                 </div>
 
@@ -1461,7 +2471,7 @@ function App() {
                   </button>
 
                   <button
-                    onClick={() => setAuthenticated(false)}
+                    onClick={handleLogout}
                     className="rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm font-medium text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
                   >
                     <span className="hidden md:inline">Logout</span>
@@ -1669,6 +2679,7 @@ function App() {
                           <InfoPill label="Recurring" value={item.recurring} />
                         </div>
                         <p className="mt-3 text-sm text-slate-600 dark:text-slate-300">{item.notes}</p>
+                        {renderCrudActions('schedules', item as Record<string, any>, { importantKey: 'completed' as any })}
                       </div>
                     ))}
                   </div>
@@ -1709,6 +2720,7 @@ function App() {
                                   <div className="h-full rounded-full bg-primary-500" style={{ width: `${task.progress}%` }} />
                                 </div>
                                 <p className="mt-2 text-xs text-slate-500">Due {task.dueDate} • {task.progress}%</p>
+                                {renderCrudActions('tasks', task as Record<string, any>)}
                               </div>
                             ))}
                         </div>
@@ -1751,6 +2763,7 @@ function App() {
                             View detailed page <ChevronRight className="h-4 w-4" />
                           </button>
                         </div>
+                        {renderCrudActions('projects', project as Record<string, any>)}
                       </div>
                     ))}
                   </div>
@@ -1779,6 +2792,7 @@ function App() {
                           <p><strong>Solution:</strong> {idea.solution}</p>
                           <p><strong>Target:</strong> {idea.targetCustomers}</p>
                         </div>
+                        {renderCrudActions('ideas', idea as Record<string, any>)}
                       </div>
                     ))}
                   </div>
@@ -1804,6 +2818,7 @@ function App() {
                           <p><strong>Problem:</strong> {plan.problem}</p>
                           <p><strong>Solution:</strong> {plan.solution}</p>
                         </div>
+                        {renderCrudActions('plansData', plan as Record<string, any>)}
                       </div>
                     ))}
                   </div>
@@ -1847,6 +2862,7 @@ function App() {
                               <span>{expense.category}</span>
                               <span>{expense.date}</span>
                             </div>
+                            {renderCrudActions('expenses', expense as Record<string, any>)}
                           </div>
                         ))}
                       </div>
@@ -1895,6 +2911,7 @@ function App() {
                               <span>{entry.category}</span>
                               <span>{entry.date}</span>
                             </div>
+                            {renderCrudActions('income', entry as Record<string, any>)}
                           </div>
                         ))}
                       </div>
@@ -1926,6 +2943,7 @@ function App() {
                           <InfoPill label="Type" value={goal.type} />
                           <InfoPill label="Target" value={goal.targetDate} />
                         </div>
+                        {renderCrudActions('goals', goal as Record<string, any>)}
                       </div>
                     ))}
                   </div>
@@ -1953,6 +2971,7 @@ function App() {
                             <li key={step}>{step}</li>
                           ))}
                         </ul>
+                        {renderCrudActions('importantPlans', plan as Record<string, any>, { importantKey: 'pinned' })}
                       </div>
                     ))}
                   </div>
@@ -1974,6 +2993,7 @@ function App() {
                             <span key={tag} className="chip">{tag}</span>
                           ))}
                         </div>
+                        {renderCrudActions('notes', note as Record<string, any>, { importantKey: 'pinned' })}
                       </div>
                     ))}
                   </div>
@@ -1993,6 +3013,7 @@ function App() {
                           </div>
                           <p className="mt-1 text-xs text-slate-500">{photo.album} • {photo.date}</p>
                           <p className="mt-2 text-sm text-slate-600 dark:text-slate-300">{photo.description}</p>
+                          {renderCrudActions('photos', photo as Record<string, any>, { canOpen: true, openLabel: 'View', importantKey: 'important' })}
                         </div>
                       </div>
                     ))}
@@ -2013,6 +3034,7 @@ function App() {
                           </div>
                           {video.important && <Star className="h-4 w-4 fill-amber-400 text-amber-400" />}
                         </div>
+                        {renderCrudActions('videos', video as Record<string, any>, { canOpen: true, openLabel: 'Watch', importantKey: 'important' })}
                       </div>
                     ))}
                   </div>
@@ -2030,8 +3052,9 @@ function App() {
                         </div>
                         <div className="flex items-center gap-2">
                           {document.important && <Star className="h-4 w-4 fill-amber-400 text-amber-400" />}
-                          <button className="rounded-xl bg-slate-100 px-3 py-2 text-sm font-medium dark:bg-slate-800">Open</button>
+                          <button onClick={() => window.open(document.url || '#', '_blank', 'noopener,noreferrer')} className="rounded-xl bg-slate-100 px-3 py-2 text-sm font-medium dark:bg-slate-800">Open</button>
                         </div>
+                        {renderCrudActions('documents', document as Record<string, any>, { canOpen: true, openLabel: 'Open', importantKey: 'important' })}
                       </div>
                     ))}
                   </div>
@@ -2053,6 +3076,7 @@ function App() {
                           </div>
                         </div>
                         <p className="mt-3 text-sm text-slate-600 dark:text-slate-300">{entry.description}</p>
+                        {renderCrudActions('achievements', entry as Record<string, any>)}
                       </div>
                     ))}
                   </div>
@@ -2078,6 +3102,7 @@ function App() {
                         <div className="mt-3 text-sm text-slate-600 dark:text-slate-300">
                           <strong>Tomorrow's plan:</strong> {entry.tomorrowPlan}
                         </div>
+                        {renderCrudActions('journalEntries', entry as Record<string, any>)}
                       </div>
                     ))}
                   </div>
@@ -2157,30 +3182,133 @@ function App() {
                 <SectionShell title="Settings" subtitle="Customize your dashboard preferences">
                   <div className="grid gap-4 lg:grid-cols-2">
                     <div className="panel p-5">
-                      <h4 className="text-lg font-semibold text-slate-900 dark:text-white">Appearance</h4>
-                      <div className="mt-4 flex gap-3">
-                        <button
-                          onClick={() => setTheme('light')}
-                          className={`rounded-xl px-4 py-2 text-sm font-medium ${theme === 'light' ? 'bg-primary-600 text-white' : 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200'}`}
-                        >
-                          Light mode
-                        </button>
-                        <button
-                          onClick={() => setTheme('dark')}
-                          className={`rounded-xl px-4 py-2 text-sm font-medium ${theme === 'dark' ? 'bg-primary-600 text-white' : 'bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-200'}`}
-                        >
-                          Dark mode
-                        </button>
+                      <h4 className="text-lg font-semibold text-slate-900 dark:text-white">Profile</h4>
+                      <div className="mt-4 space-y-4">
+                        <div>
+                          <label className="label">Display name</label>
+                          <input
+                            value={profile.name}
+                            onChange={(event) => setProfile((current) => ({ ...current, name: event.target.value }))}
+                            className="input"
+                          />
+                        </div>
+                        <div>
+                          <label className="label">Status</label>
+                          <input
+                            value={profile.status}
+                            onChange={(event) => setProfile((current) => ({ ...current, status: event.target.value }))}
+                            className="input"
+                          />
+                        </div>
+                        <div>
+                          <label className="label">Bio</label>
+                          <textarea
+                            value={profile.bio}
+                            onChange={(event) => setProfile((current) => ({ ...current, bio: event.target.value }))}
+                            className="input min-h-[90px]"
+                          />
+                        </div>
+                        <div>
+                          <label className="label">Quote</label>
+                          <input
+                            value={profile.quote}
+                            onChange={(event) => setProfile((current) => ({ ...current, quote: event.target.value }))}
+                            className="input"
+                          />
+                        </div>
+                        <div>
+                          <label className="label">Profile photo URL</label>
+                          <input
+                            value={profile.photo}
+                            onChange={(event) => setProfile((current) => ({ ...current, photo: event.target.value }))}
+                            className="input"
+                          />
+                        </div>
+                        <div>
+                          <label className="label">Upload profile photo</label>
+                          <input type="file" accept="image/*" onChange={handleProfileUpload} className="input" />
+                          {vaultUploading && <p className="mt-2 text-xs text-slate-500">Uploading...</p>}
+                        </div>
                       </div>
                     </div>
+
                     <div className="panel p-5">
-                      <h4 className="text-lg font-semibold text-slate-900 dark:text-white">Preferences</h4>
-                      <div className="mt-4 space-y-2 text-sm text-slate-600 dark:text-slate-300">
-                        <p>Dashboard widgets: enabled</p>
-                        <p>Widget order: custom</p>
-                        <p>Notifications: active</p>
-                        <p>Private mode: secure</p>
+                      <h4 className="text-lg font-semibold text-slate-900 dark:text-white">Appearance & privacy</h4>
+                      <div className="mt-4 space-y-4">
+                        <div>
+                          <label className="label">Dashboard title</label>
+                          <input
+                            value={userSettings.dashboardTitle}
+                            onChange={(event) => setUserSettings((current) => ({ ...current, dashboardTitle: event.target.value }))}
+                            className="input"
+                          />
+                        </div>
+                        <div>
+                          <label className="label">Accent</label>
+                          <select
+                            value={userSettings.accentColor}
+                            onChange={(event) => setUserSettings((current) => ({ ...current, accentColor: event.target.value }))}
+                            className="input"
+                          >
+                            <option value="sky">Sky</option>
+                            <option value="violet">Violet</option>
+                            <option value="emerald">Emerald</option>
+                            <option value="amber">Amber</option>
+                          </select>
+                        </div>
+                        <div className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-800/80">
+                          <span className="text-sm text-slate-700 dark:text-slate-200">Private mode</span>
+                          <button
+                            type="button"
+                            onClick={() => setUserSettings((current) => ({ ...current, privateMode: !current.privateMode }))}
+                            className={`rounded-full px-3 py-1 text-xs font-medium ${userSettings.privateMode ? 'bg-emerald-500 text-white' : 'bg-slate-200 text-slate-600 dark:bg-slate-700 dark:text-slate-200'}`}
+                          >
+                            {userSettings.privateMode ? 'On' : 'Off'}
+                          </button>
+                        </div>
+                        <div className="flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-800/80">
+                          <span className="text-sm text-slate-700 dark:text-slate-200">Notifications</span>
+                          <button
+                            type="button"
+                            onClick={() => setUserSettings((current) => ({ ...current, notifications: !current.notifications }))}
+                            className={`rounded-full px-3 py-1 text-xs font-medium ${userSettings.notifications ? 'bg-emerald-500 text-white' : 'bg-slate-200 text-slate-600 dark:bg-slate-700 dark:text-slate-200'}`}
+                          >
+                            {userSettings.notifications ? 'Enabled' : 'Disabled'}
+                          </button>
+                        </div>
                       </div>
+                    </div>
+                  </div>
+
+                  <div className="mt-6 panel p-5">
+                    <div className="mb-4 flex items-center justify-between gap-3">
+                      <h4 className="text-lg font-semibold text-slate-900 dark:text-white">Private vault</h4>
+                      <div className="flex gap-2">
+                        <label className="rounded-xl bg-primary-600 px-3 py-2 text-sm font-medium text-white cursor-pointer">
+                          Upload photo
+                          <input type="file" accept="image/*" className="hidden" onChange={(event) => handleVaultUpload(event, 'photo')} />
+                        </label>
+                        <label className="rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-700 cursor-pointer dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200">
+                          Upload document
+                          <input type="file" className="hidden" onChange={(event) => handleVaultUpload(event, 'document')} />
+                        </label>
+                      </div>
+                    </div>
+
+                    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                      {vaultItems.map((item) => (
+                        <div key={item.id} className="rounded-2xl border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-800/80">
+                          {item.type === 'photo' ? (
+                            <img src={item.url} alt={item.name} className="h-32 w-full rounded-xl object-cover" />
+                          ) : (
+                            <div className="flex h-32 items-center justify-center rounded-xl bg-slate-200 text-sm font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-200">
+                              {item.name}
+                            </div>
+                          )}
+                          <p className="mt-3 font-medium text-slate-900 dark:text-white">{item.name}</p>
+                          <p className="mt-1 text-xs text-slate-500">{item.category} • {item.uploadedAt}</p>
+                        </div>
+                      ))}
                     </div>
                   </div>
                 </SectionShell>
